@@ -1,0 +1,151 @@
+---
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Template to install OpenBalena on AWS environment on ubuntu'
+Parameters:
+  DomainName:
+    Description: DNS domain for created stack (clear it is you want the deployment with an insecure SSL certificate)
+    Type: String
+    Default: balena.openremote.io
+  HostName:
+    Description: Hostname of the balenaserver
+    Type: String
+    Default: openbalena
+  HostedZone:
+    Description: Use AWS hosted zone
+    Type: String
+    Default: true
+    AllowedValues:
+      - true
+      - false
+  KeyName:
+    Description: Name of an existing EC2 KeyPair to enable SSH access to the instance
+    Type: AWS::EC2::KeyPair::KeyName
+    Default: openbalena
+    ConstraintDescription: must be the name of an existing EC2 KeyPair.
+  InstanceType:
+    Description: EC2 instance type (don't change it unless you know what you are doing)
+    Type: String
+    # AWS Compute Optimizer reports that this instance type is under-provisioned and advise to use
+    # more than double the price instance. However, it works in our test setup.
+    Default: t3a.small
+    ConstraintDescription: must be a valid EC2 instance type.
+  InstanceAMI:
+    Description: Managed AMI ID for EC2 Instance (don't change it unless you know what you are doing)
+    Type : String
+    Default: ami-0b5247d4d01653d09
+Conditions:
+  DnsRecordCreate: !Equals [!Ref HostedZone, true]
+  DomainName: !Not [ !Equals [!Ref DomainName, ""] ]
+Outputs:
+    InstanceIP:
+      Description: The Instance public IP
+      Value: !GetAtt EC2Instance.PublicIp
+    PublicUrl:
+      Condition: DomainName
+      Description: openbalena Instance URL
+      Value: !Join [ ".", [ !Ref HostName, !Ref DomainName ] ]
+Resources:
+  DNSRecord:
+    Condition: DnsRecordCreate
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneName: !Join [ "", [ !Ref DomainName, "." ] ]
+      Name: !Ref DomainName
+      TTL: '60'
+      Type: A
+      ResourceRecords:
+      - !GetAtt EC2Instance.PublicIp
+  DNSRecord2:
+   Condition: DnsRecordCreate
+   Type: AWS::Route53::RecordSet
+   Properties:
+     HostedZoneName: !Join [ "", [ !Ref DomainName, "."] ]
+     Name: api.balena.openremote.io.
+     TTL: '60'
+     Type: CNAME
+     ResourceRecords:
+     - !GetAtt EC2Instance.PublicDnsName
+  DNSRecord3:
+   Condition: DnsRecordCreate
+   Type: AWS::Route53::RecordSet
+   Properties:
+     HostedZoneName: !Join [ "", [ !Ref DomainName, "."] ]
+     Name: vpn.balena.openremote.io.
+     TTL: '60'
+     Type: CNAME
+     ResourceRecords:
+     - !GetAtt EC2Instance.PublicDnsName
+  DNSRecord4:
+   Condition: DnsRecordCreate
+   Type: AWS::Route53::RecordSet
+   Properties:
+     HostedZoneName: !Join [ "", [ !Ref DomainName, "."] ]
+     Name: registry.balena.openremote.io.
+     TTL: '60'
+     Type: CNAME
+     ResourceRecords:
+     - !GetAtt EC2Instance.PublicDnsName
+  DNSRecord5:
+   Condition: DnsRecordCreate
+   Type: AWS::Route53::RecordSet
+   Properties:
+     HostedZoneName: !Join [ "", [ !Ref DomainName, "."] ]
+     Name: s3.balena.openremote.io.
+     TTL: '60'
+     Type: CNAME
+     ResourceRecords:
+     - !GetAtt EC2Instance.PublicDnsName
+  EC2Instance:
+    Type: AWS::EC2::Instance
+    Properties:
+      InstanceType:
+        Ref: InstanceType
+      KeyName:
+        Ref: KeyName
+      ImageId:
+        Ref: InstanceAMI
+      SecurityGroups:
+        - Ref: InstanceSecurityGroup
+      Tags:
+        - Key: "Name"
+          Value: "openbalena"
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          apt-get update && apt-get install -y build-essential git docker.io libssl-dev nodejs npm
+          curl -L https://github.com/docker/compose/releases/download/1.27.4/docker-compose-Linux-x86_64 -o /usr/local/bin/docker-compose          
+          chmod 0755 /usr/local/bin/docker-compose
+          usermod -a -G sudo ubuntu
+          usermod -a -G docker ubuntu
+          su ubuntu
+          cd /home/ubuntu
+          git clone https://github.com/balena-io/open-balena.git
+          cd /home/ubuntu/open-balena
+          docker-compose --version
+          sleep 5
+          sudo bash /home/ubuntu/open-balena/scripts/quickstart -U balena@example.com -P PasswordHere -d balena.openremote.io
+          sleep 5
+          sudo systemctl start docker
+          sleep 5
+          sudo bash /home/ubuntu/open-balena/scripts/compose up -d
+  InstanceSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: SSH + HTTP + HTTPS
+      SecurityGroupIngress:
+      - IpProtocol: tcp
+        FromPort: '22'
+        ToPort: '22'
+        CidrIp: 0.0.0.0/0
+      - IpProtocol: tcp
+        FromPort: '80'
+        ToPort: '80'
+        CidrIp: 0.0.0.0/0
+      - IpProtocol: tcp
+        FromPort: '443'
+        ToPort: '443'
+        CidrIp: 0.0.0.0/0
+      - IpProtocol: icmp
+        FromPort: '8'
+        ToPort: '-1'
+        CidrIp: 0.0.0.0/0
